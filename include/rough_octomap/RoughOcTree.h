@@ -324,6 +324,8 @@ namespace octomap {
     }
 
     // Set stair values for the given node by key or coordinate
+    RoughOcTreeNode* integrateNodeStairs(const OcTreeKey& key, bool is_stairs);
+
     RoughOcTreeNode* setNodeStairValue(const OcTreeKey& key, float logodds);
 
     RoughOcTreeNode* setNodeStairValue(float x, float y, float z, float logodds) {

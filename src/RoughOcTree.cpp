@@ -243,6 +243,23 @@ namespace octomap {
     }
     return n;
   }
+  
+  RoughOcTreeNode* RoughOcTree::integrateNodeStairs(const OcTreeKey& key, bool is_stairs) {
+    float log_odds_update = this->prob_miss_log;
+    if (is_stairs)
+      log_odds_update = this->prob_hit_log;
+
+    RoughOcTreeNode* leaf = this->search(key);
+    // no change: node already at threshold
+    if (leaf) {
+      if ( !((log_odds_update >= 0 && leaf->getStairLogOdds() >= this->clamping_thres_max)
+        || (log_odds_update <= 0 && leaf->getStairLogOdds() <= this->clamping_thres_min)) ) {
+        updateNodeStairLogOdds(leaf, log_odds_update);
+      }
+    }
+    
+    return leaf;
+  }
 
   RoughOcTreeNode* RoughOcTree::updateNodeStairs(const OcTreeKey& key, bool is_stairs) {
     float logOdds = this->prob_miss_log;
