@@ -245,11 +245,11 @@ namespace octomap {
     }
     return n;
   }
-  
+
   RoughOcTreeNode* RoughOcTree::integrateNodeStairs(const OcTreeKey& key, bool is_stairs) {
-    float log_odds_update = this->prob_miss_log;
+    float log_odds_update = logodds(0.5);
     if (is_stairs)
-      log_odds_update = this->prob_hit_log;
+      log_odds_update = logodds(0.99);
 
     RoughOcTreeNode* leaf = this->search(key);
     // no change: node already at threshold
@@ -259,7 +259,7 @@ namespace octomap {
         updateNodeStairLogOdds(leaf, log_odds_update);
       }
     }
-    
+
     return leaf;
   }
 
