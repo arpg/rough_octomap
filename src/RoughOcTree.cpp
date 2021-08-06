@@ -39,6 +39,7 @@ namespace octomap {
   std::ostream& RoughOcTreeNode::writeData(std::ostream &s) const {
     s.write((const char*) &value, sizeof(value)); // occupancy
     s.write((const char*) &rough, sizeof(rough)); // rough
+    s.write((const char*) &stair_logodds, sizeof(stair_logodds)); // stair log odds
 
     return s;
   }
@@ -46,6 +47,7 @@ namespace octomap {
   std::istream& RoughOcTreeNode::readData(std::istream &s) {
     s.read((char*) &value, sizeof(value)); // occupancy
     s.read((char*) &rough, sizeof(rough)); // rough
+    s.read((char*) &stair_logodds, sizeof(stair_logodds)); // stair log odds
 
     return s;
   }
@@ -243,11 +245,11 @@ namespace octomap {
     }
     return n;
   }
-  
+
   RoughOcTreeNode* RoughOcTree::integrateNodeStairs(const OcTreeKey& key, bool is_stairs) {
-    float log_odds_update = this->prob_miss_log;
+    float log_odds_update = logodds(0.5);
     if (is_stairs)
-      log_odds_update = this->prob_hit_log;
+      log_odds_update = logodds(0.99);
 
     RoughOcTreeNode* leaf = this->search(key);
     // no change: node already at threshold
@@ -257,8 +259,25 @@ namespace octomap {
         updateNodeStairLogOdds(leaf, log_odds_update);
       }
     }
-    
+
     return leaf;
+  }
+
+  float RoughOcTree::getNodeStairLogOdds(const OcTreeKey& key) {
+    RoughOcTreeNode* n = search (key);
+    if (n != 0) {
+      return n->getStairLogOdds();
+    }
+    return 0.0;
+  }
+
+  RoughOcTreeNode* RoughOcTree::setNodeStairLogOdds(const OcTreeKey& key, float value) {
+    RoughOcTreeNode* n = search (key);
+    if (n != 0) {
+      n->setStairLogOdds(value);
+      return n;
+    }
+    return NULL;
   }
 
   RoughOcTreeNode* RoughOcTree::updateNodeStairs(const OcTreeKey& key, bool is_stairs) {
@@ -572,7 +591,7 @@ namespace octomap {
     assert(node);
 
     uint num_rough_bits = log2(num_binary_bins);
-    uint num_bits_per_node = 2+num_rough_bits;
+    uint num_bits_per_node = 2+num_rough_bits+1; // 2 for occ, rough bits, 1 for stairs
 
     // 2+num_rough_bits for each children, 8 children per node -> (2+num_rough_bits)*8 bits total
     boost::dynamic_bitset<> children(num_bits_per_node*8);
@@ -597,14 +616,14 @@ namespace octomap {
 
     for (unsigned int i=0; i<8; i++) {
       if ((children_access(i,0) == 1) && (children_access(i,1) == 0)) {
-        // printf("child is free\n");
         // child is free leaf
+        // printf("child is free\n");
         this->createNodeChild(node, i);
         this->getNodeChild(node, i)->setLogOdds(this->clamping_thres_min);
       }
       else if ((children_access(i,0) == 0) && (children_access(i,1) == 1)) {
-        // printf("child is occupied\n");
         // child is occupied leaf
+        // printf("child is occupied\n");
         this->createNodeChild(node, i);
         this->getNodeChild(node, i)->setLogOdds(this->clamping_thres_max);
         // if (children_access(i,2) == 1) { // if binarized child is rough, set rough value to binary thres
@@ -617,6 +636,7 @@ namespace octomap {
         double min=0.0, max=1.0; // max>1.0 to prevent overflow for rough=1.0
         double binsize = (max-min)/(num_binary_bins-1);
         float rough = binidx*binsize;
+        float stair = children_access(i,2+num_rough_bits);
         // if (binidx==15) {
         //   std::cout << "new bits ";
         //   std::cout << rough_bits;
@@ -625,10 +645,11 @@ namespace octomap {
         //   std::cout << std::endl;
         // }
         this->getNodeChild(node, i)->setRough(rough);
+        this->getNodeChild(node, i)->setStairLogOdds(stair);
       }
       else if ((children_access(i,0) == 1) && (children_access(i,1) == 1)) {
-        // printf("child is parent\n");
         // child has children
+        // printf("child is parent\n");
         this->createNodeChild(node, i);
         this->getNodeChild(node, i)->setLogOdds(-200.); // child is unkown, we leave it uninitialized
       }
@@ -642,6 +663,7 @@ namespace octomap {
         if (fabs(child->getLogOdds() + 200.)<1e-3) { // has children?
           readBinaryNode(s, child);
           child->setLogOdds(child->getMaxChildLogOdds());
+          child->setStairLogOdds(child->getMaxChildStairLogOdds());
         }
       } // end if child exists
     } // end for children
@@ -654,7 +676,7 @@ namespace octomap {
     assert(node);
 
     uint num_rough_bits = log2(num_binary_bins);
-    uint num_bits_per_node = 2+num_rough_bits;
+    uint num_bits_per_node = 2+num_rough_bits+1;
 
     // 2+num_rough_bits for each children, 8 children per node -> (2+num_rough_bits)*8 bits total
     boost::dynamic_bitset<> children(num_bits_per_node*8);
@@ -718,6 +740,9 @@ namespace octomap {
             //   std::cout << "********************************";
             //   std::cout << std::endl;
             // }
+          }
+          if (this->isNodeStairs(child)) {
+            children_access(i,2+num_rough_bits) = 1;
           }
         }
         else { children_access(i,0) = 1; children_access(i,1) = 0; }

@@ -326,18 +326,32 @@ namespace octomap {
     // Set stair values for the given node by key or coordinate
     RoughOcTreeNode* integrateNodeStairs(const OcTreeKey& key, bool is_stairs);
 
-    RoughOcTreeNode* setNodeStairValue(const OcTreeKey& key, float logodds);
+    float getNodeStairLogOdds(const OcTreeKey& key);
 
-    RoughOcTreeNode* setNodeStairValue(float x, float y, float z, float logodds) {
+    float getNodeStairLogOdds(float x, float y, float z) {
       OcTreeKey key;
-      if (!this->coordToKeyChecked(point3d(x,y,z), key)) return NULL;
-      return setNodeStairValue(key,logodds);
+      if (!this->coordToKeyChecked(point3d(x,y,z), key)) return 0.0;
+      return getNodeStairLogOdds(key);
     }
 
-    RoughOcTreeNode* setNodeStairValue(point3d pt, float logodds) {
+    float getNodeStairLogOdds(point3d pt) {
+      OcTreeKey key;
+      if (!this->coordToKeyChecked(pt, key)) return 0.0;
+      return getNodeStairLogOdds(key);
+    }
+
+    RoughOcTreeNode* setNodeStairLogOdds(const OcTreeKey& key, float logodds);
+
+    RoughOcTreeNode* setNodeStairLogOdds(float x, float y, float z, float logodds) {
+      OcTreeKey key;
+      if (!this->coordToKeyChecked(point3d(x,y,z), key)) return NULL;
+      return setNodeStairLogOdds(key,logodds);
+    }
+
+    RoughOcTreeNode* setNodeStairLogOdds(point3d pt, float logodds) {
       OcTreeKey key;
       if (!this->coordToKeyChecked(pt, key)) return NULL;
-      return setNodeStairValue(key,logodds);
+      return setNodeStairLogOdds(key,logodds);
     }
 
     /// queries whether a node is stairs according to the tree's parameter for "occupancy"
