@@ -247,7 +247,7 @@ namespace octomap {
   }
 
   RoughOcTreeNode* RoughOcTree::integrateNodeStairs(const OcTreeKey& key, bool is_stairs) {
-    float log_odds_update = logodds(0.5);
+    float log_odds_update = logodds(0.49);
     if (is_stairs)
       log_odds_update = logodds(0.99);
 
