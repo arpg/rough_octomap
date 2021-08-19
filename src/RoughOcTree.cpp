@@ -119,11 +119,22 @@ namespace octomap {
 
   // tree implementation  --------------------------------------
   RoughOcTree::RoughOcTree(double in_resolution)
-  : OccupancyOcTreeBase<RoughOcTreeNode>(in_resolution) {
+  : OccupancyOcTreeBase<RoughOcTreeNode>(in_resolution), bitmask(0xff) {
     roughOcTreeMemberInit.ensureLinking();
     binary_encoding_mode = RoughBinaryEncodingMode::BINNING;
     rough_binary_thres = 0.99;
-    num_binary_bins = 16; // must be power of 2
+    // Defaults for stock map - no rough bits
+    num_binary_bins = 0;
+    // We know these, but leaving the calculations for clarity.  They get set in setRoughEnabled()
+    num_rough_bits = log2(num_binary_bins);
+    num_bits_per_node = 2 + num_rough_bits;
+    if (num_binary_bins) binsize = 1 / (num_binary_bins - 1);
+    // stair probability params
+    stairs_clamping_thres_max = logodds(0.12);
+    stairs_clamping_thres_min = logodds(0.97);
+    stairs_prob_thres_log = logodds(0.5);
+    stairs_prob_hit_log = logodds(0.99);
+    stairs_prob_miss_log = logodds(0.49);
   }
 
   float RoughOcTree::getNodeRough(const OcTreeKey& key) {
@@ -247,15 +258,15 @@ namespace octomap {
   }
 
   RoughOcTreeNode* RoughOcTree::integrateNodeStairs(const OcTreeKey& key, bool is_stairs) {
-    float log_odds_update = logodds(0.49);
+    float log_odds_update = this->stairs_prob_miss_log;
     if (is_stairs)
-      log_odds_update = logodds(0.99);
+      log_odds_update = this->stairs_prob_hit_log;
 
     RoughOcTreeNode* leaf = this->search(key);
     // no change: node already at threshold
     if (leaf) {
-      if ( !((log_odds_update >= 0 && leaf->getStairLogOdds() >= this->clamping_thres_max)
-        || (log_odds_update <= 0 && leaf->getStairLogOdds() <= this->clamping_thres_min)) ) {
+      if ( !((log_odds_update >= 0 && leaf->getStairLogOdds() >= this->stairs_clamping_thres_max)
+        || (log_odds_update <= 0 && leaf->getStairLogOdds() <= this->stairs_clamping_thres_min)) ) {
         updateNodeStairLogOdds(leaf, log_odds_update);
       }
     }
@@ -375,12 +386,12 @@ namespace octomap {
 
   void RoughOcTree::updateNodeStairLogOdds(RoughOcTreeNode* occupancyNode, const float& update) const {
     occupancyNode->addStairValue(update);
-    if (occupancyNode->getStairLogOdds() < this->clamping_thres_min) {
-      occupancyNode->setStairLogOdds(this->clamping_thres_min);
+    if (occupancyNode->getStairLogOdds() < this->stairs_clamping_thres_min) {
+      occupancyNode->setStairLogOdds(this->stairs_clamping_thres_min);
       return;
     }
-    if (occupancyNode->getStairLogOdds() > this->clamping_thres_max) {
-      occupancyNode->setStairLogOdds(this->clamping_thres_max);
+    if (occupancyNode->getStairLogOdds() > this->stairs_clamping_thres_max) {
+      occupancyNode->setStairLogOdds(this->stairs_clamping_thres_max);
     }
   }
 
@@ -422,7 +433,7 @@ namespace octomap {
     return s;
   }
 
-  std::ostream& RoughOcTree::writeBinaryData(std::ostream &s) const{
+  std::ostream& RoughOcTree::writeBinaryData(std::ostream &s) {
     OCTOMAP_DEBUG("Writing %zu nodes to output stream...", this->size());
     if (this->root)
       this->writeBinaryNode(s, this->root);
@@ -446,7 +457,7 @@ namespace octomap {
     }
   }
 
-  std::ostream& RoughOcTree::writeBinaryNode(std::ostream &s, const RoughOcTreeNode* node) const {
+  std::ostream& RoughOcTree::writeBinaryNode(std::ostream &s, const RoughOcTreeNode* node) {
     switch (binary_encoding_mode) {
       case THRESHOLDING:
         // printf("Writing binary node via thresholding.\n");
@@ -523,7 +534,7 @@ namespace octomap {
     return s;
   }
 
-  std::ostream& RoughOcTree::writeBinaryNodeViaThresholding(std::ostream &s, const RoughOcTreeNode* node) const{
+  std::ostream& RoughOcTree::writeBinaryNodeViaThresholding(std::ostream &s, const RoughOcTreeNode* node) {
 
     assert(node);
 
@@ -590,70 +601,48 @@ namespace octomap {
 
     assert(node);
 
-    uint num_rough_bits = log2(num_binary_bins);
-    uint num_bits_per_node = 2+num_rough_bits+1; // 2 for occ, rough bits, 1 for stairs
-
-    // 2+num_rough_bits for each children, 8 children per node -> (2+num_rough_bits)*8 bits total
-    boost::dynamic_bitset<> children(num_bits_per_node*8);
-    auto children_access = [&children,num_bits_per_node] (uint child, uint value) {return children[child*num_bits_per_node+value];}; // maps child and value indices to aligned char array, returns bitset reference
-
-    //     std::cout << "read:  "
-    //        << child1to4.to_string<char,std::char_traits<char>,std::allocator<char> >() << " "
-    //        << child5to8.to_string<char,std::char_traits<char>,std::allocator<char> >() << std::endl;
-
-    std::bitset<8> children_byte;
+    children.reset();
     for (int i=0; i<num_bits_per_node; i++) {
+      // Read each char to our preallocated "byte"
       char children_char;
       s.read((char*)&children_char, sizeof(char));
-      std::bitset<8> children_byte(children_char);
-      for (uint j=0; j<8; j++) {
-        children[i*8+j] = children_byte[j];
-      }
+      read_byte = children_char;
+      // Mask the byte to only the 8 bits, then shift appropriately and add to this bitset
+      children |= (read_byte & bitmask) << (i * 8);
     }
 
     // inner nodes default to occupied
     node->setLogOdds(this->clamping_thres_max);
 
     for (unsigned int i=0; i<8; i++) {
-      if ((children_access(i,0) == 1) && (children_access(i,1) == 0)) {
-        // child is free leaf
-        // printf("child is free\n");
+      const uint idx = i * num_bits_per_node;
+      if ((children[idx] == 1) && (children[idx + 1] == 0)) {
         this->createNodeChild(node, i);
         this->getNodeChild(node, i)->setLogOdds(this->clamping_thres_min);
       }
-      else if ((children_access(i,0) == 0) && (children_access(i,1) == 1)) {
-        // child is occupied leaf
-        // printf("child is occupied\n");
+      else if ((children[idx] == 0) && (children[idx + 1] == 1)) {
         this->createNodeChild(node, i);
         this->getNodeChild(node, i)->setLogOdds(this->clamping_thres_max);
-        // if (children_access(i,2) == 1) { // if binarized child is rough, set rough value to binary thres
-        //   this->getNodeChild(node, i)->setRough(this->rough_binary_thres);
-        boost::dynamic_bitset<> rough_bits(num_rough_bits);
-        for (uint j=0; j<num_rough_bits; j++) {
-          rough_bits[j] = children_access(i,2+j);
+
+        if (this->roughEnabled) {
+          for (uint j=0; j<num_rough_bits; j++) {
+            rough_bits[j] = children[idx + 2 + j];
+          }
+          this->getNodeChild(node, i)->setRough(rough_bits.to_ulong() * binsize);
         }
-        int binidx = rough_bits.to_ulong();
-        double min=0.0, max=1.0; // max>1.0 to prevent overflow for rough=1.0
-        double binsize = (max-min)/(num_binary_bins-1);
-        float rough = binidx*binsize;
-        float stair = children_access(i,2+num_rough_bits);
-        // if (binidx==15) {
-        //   std::cout << "new bits ";
-        //   std::cout << rough_bits;
-        //   printf(" = %d %f", binidx, rough);
-        //   std::cout << "********************************";
-        //   std::cout << std::endl;
-        // }
-        this->getNodeChild(node, i)->setRough(rough);
-        this->getNodeChild(node, i)->setStairLogOdds(stair);
+
+        if (this->stairsEnabled) {
+          if (children[idx + 2 + num_rough_bits]==1) {
+            this->getNodeChild(node, i)->setStairLogOdds(this->stairs_clamping_thres_max);
+          } else {
+            this->getNodeChild(node, i)->setStairLogOdds(this->stairs_clamping_thres_min);
+          }
+        }
       }
-      else if ((children_access(i,0) == 1) && (children_access(i,1) == 1)) {
-        // child has children
-        // printf("child is parent\n");
+      else if ((children[idx] == 1) && (children[idx + 1] == 1)) {
         this->createNodeChild(node, i);
-        this->getNodeChild(node, i)->setLogOdds(-200.); // child is unkown, we leave it uninitialized
+        this->getNodeChild(node, i)->setLogOdds(-200.);
       }
-        // printf("child is unknown\n");
     }
 
     // read children's children and set the label
@@ -671,117 +660,40 @@ namespace octomap {
     return s;
   }
 
-  std::ostream& RoughOcTree::writeBinaryNodeViaBinning(std::ostream &s, const RoughOcTreeNode* node) const{
+  std::ostream& RoughOcTree::writeBinaryNodeViaBinning(std::ostream &s, const RoughOcTreeNode* node) {
 
     assert(node);
 
-    uint num_rough_bits = log2(num_binary_bins);
-    uint num_bits_per_node = 2+num_rough_bits+1;
-
-    // 2+num_rough_bits for each children, 8 children per node -> (2+num_rough_bits)*8 bits total
-    boost::dynamic_bitset<> children(num_bits_per_node*8);
-    auto children_access = [&children,num_bits_per_node] (uint child, uint value) {return children[child*num_bits_per_node+value];}; // maps child and value indices to aligned char array, returns bitset reference
-
-    // 10*** : child is free node
-    // 01*** : child is occupied node
-    // 00*** : child is unkown node
-    // 11*** : child has children
-    // **000 : child is max traversable
-    // **111 : child is max rough
-
-    // speedup: only set bits to 1, rest is init with 0 anyway,
-    //          can be one logic expression per bit
-
     for (unsigned int i=0; i<8; i++) {
+      const uint idx = i * num_bits_per_node;
       if (this->nodeChildExists(node, i)) {
         const RoughOcTreeNode* child = this->getNodeChild(node, i);
-        if      (this->nodeHasChildren(child))  { children_access(i,0) = 1; children_access(i,1) = 1; }
+        if      (this->nodeHasChildren(child))  { children[idx] = 1; children[idx + 1] = 1; }
         else if (this->isNodeOccupied(child)) {
-          children_access(i,0) = 0; children_access(i,1) = 1;
-          if (child->isRoughSet()) {
-            float rough = child->getRough();
-            // float *rough_float = new float(child->getRough());
-            // int *rough_int = reinterpret_cast<int*>(&rough_float); // use reinterpret_cast function
-            // printf("********\nnew bits for %f %d: ",*rough_float,*rough_int);
-            // for (int k = 31; k >=0; k--) // for loop to print out binary pattern
-            // {
-            //   int bit = ((*rough_int >> k)&1); // get the copied bit value shift right k times, then and with a 1.
-            //   printf("%d ",bit);
-            // }
-            // char *rough_char = reinterpret_cast<char*>(rough_float); // use reinterpret_cast function
-            // printf("new bits for %f %x:\t\t",*rough_float,*rough_char);
-            // for (int k = 31; k >=0; k--) // for loop to print out binary pattern
-            // {
-            //   // int bit = ((*rough_int >> k)&1); // get the copied bit value shift right k times, then and with a 1.
-            //   // int bit = ((*rough_char >> k)&1);
-            //   std::cout << ((*rough_char>>k)&1);
-            //   // std::cout << (*rough_char&(1<<k));
-            //   std::cout << " ";
-            // }
-            // union { float in; int out; } data;
-            // data.in = child->getRough();
-            // std::bitset<sizeof(float)*8> bits(data.out);
-            // std::cout << "new bits " << data.in << " ";
-            // std::cout << bits;
-            double min=0.0, max=1.0; // max>1.0 to prevent overflow for rough=1.0
-            double binsize = (max-min)/(num_binary_bins-1);
-            int binidx = floor(rough/binsize);
-            boost::dynamic_bitset<> rough_bits(num_rough_bits, binidx);
-            // std::cout << "new bits " << rough << " ";
-            // std::cout << bits;
-            // printf("\n");
+          children[idx] = 0; children[idx + 1] = 1;
+          // Check the bool directly for fastest speed so we can ignore if not enabled
+          // If rough is set, but there's a NAN, there might be a problem with reading!
+          if (this->roughEnabled && child->isRoughSet()) {
+            rough_bits = floor(child->getRough() / binsize);
             for (uint j=0; j<num_rough_bits; j++) {
-              children_access(i,2+j) = rough_bits[j];
+              children[idx + 2 + j] = rough_bits[j];
             }
-            // if (binidx==15) {
-            //   std::cout << "old bits ";
-            //   std::cout << rough_bits;
-            //   printf(" = %d %f", binidx, rough);
-            //   std::cout << "********************************";
-            //   std::cout << std::endl;
-            // }
           }
-          if (this->isNodeStairs(child)) {
-            children_access(i,2+num_rough_bits) = 1;
+          if (this->stairsEnabled && this->isNodeStairs(child)) {
+            children[idx + 2 + num_rough_bits] = 1;
           }
         }
-        else { children_access(i,0) = 1; children_access(i,1) = 0; }
+        else { children[idx] = 1; children[idx + 1] = 0; }
       }
-      else {
-        children_access(i,0) = 0; children_access(i,1) = 0; // shouldn't be necessary since default value is 0? but probably removed by compiler anyways?
-      }
+      else { children[idx] = 0; children[idx + 1] = 0; }
     }
 
-    //     std::cout << "wrote: "
-    //        << child1to4.to_string<char,std::char_traits<char>,std::allocator<char> >() << " "
-    //        << child5to8.to_string<char,std::char_traits<char>,std::allocator<char> >() << std::endl;
-
-    // char childset1_char = (char) children[0].to_ulong();
-    // char childset2_char = (char) children[1].to_ulong();
-    // char childset3_char = (char) children[2].to_ulong();
-
-    // s.write((char*)&childset1_char, sizeof(char));
-    // s.write((char*)&childset2_char, sizeof(char));
-    // s.write((char*)&childset3_char, sizeof(char));
-
-    // char *children_char = &((char)(children.to_ulong()));
-    // s.write(children_char, sizeof(children));
-    // for (int i=0; i<num_bits_per_node; i++) {
-    //   std::bitset<8> children_byte;
-    //   for (int j=0; j<8; j++) {
-    //     children_byte[j] = children_access(j,i);
-    //   }
-    //   char children_char = (char) children_byte.to_ulong();
-    //   s.write((char*)&children_char, sizeof(char));
-    // }
-    std::bitset<8> children_byte;
-    for (int i=0; i<children.size(); i++) {
-      children_byte[i%8] = children[i];
-      if (i%8==7) {
-        char children_char = (char) children_byte.to_ulong();
-        s.write((char*)&children_char, sizeof(char));
-      }
+    // If children length is not divisible by 8, may have issues!
+    for (int i=0; i < num_bits_per_node; ++i) {
+      char children_char = (char)((children >> (8 * i)) & bitmask).to_ulong();
+      s.write((char*)&children_char, sizeof(char));
     }
+
     // write children's children
     for (unsigned int i=0; i<8; i++) {
       if (this->nodeChildExists(node, i)) {

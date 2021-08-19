@@ -286,14 +286,59 @@ namespace octomap {
 
     std::string getTreeType() const {return "RoughOcTree";}
 
+    inline void updateNumBinsPerNode() {
+      this->num_bits_per_node = 2 + this->num_rough_bits + 1*((int)getStairsEnabled());
+    }
+
     inline bool getRoughEnabled() const { return roughEnabled; }
     inline void setRoughEnabled(bool e) {
       this->roughEnabled = e;
+      // If disabled, set the bins to 0.  If enabled, only set bins if not already set,
+      // since the read function can set the number of bins
       if (!e) this->num_binary_bins = 0;
+      else if (!this->num_binary_bins) this->num_binary_bins = this->binary_bins_to_use;
+      // Reset the bits calculations
+      this->num_rough_bits = log2(this->num_binary_bins);
+      updateNumBinsPerNode();
+      if (this->num_binary_bins) this->binsize = 1.0 / (this->num_binary_bins - 1);
+    }
+
+    inline bool getStairsEnabled() const { return stairsEnabled; }
+    inline void setStairsEnabled(bool e) {
+      this->stairsEnabled = e;
+      updateNumBinsPerNode();
     }
 
     inline uint getNumBins() const { return num_binary_bins; }
-    inline void setNumBins(uint n) { this->num_binary_bins = n; }
+    inline void setNumBins(uint n) {
+      this->num_binary_bins = n;
+      if (n) setRoughEnabled(true);
+    }
+
+    inline float getStairsClampingThresMax() const { return probability(stairs_clamping_thres_max); }
+    inline void setStairsClampingThresMax(float v) {
+      this->stairs_clamping_thres_max = logodds(v);
+    }
+
+    inline float getStairsClampingThresMin() const { return probability(stairs_clamping_thres_min); }
+    inline void setStairsClampingThresMin(float v) {
+      this->stairs_clamping_thres_min = logodds(v);
+    }
+
+    inline float getStairsProbThres() const { return probability(stairs_prob_thres_log); }
+    inline void setStairsProbThres(float v) {
+      this->stairs_prob_thres_log = logodds(v);
+    }
+
+    inline float getStairsProbHit() const { return probability(stairs_prob_hit_log); }
+    inline void setStairsProbHit(float v) {
+      this->stairs_prob_hit_log = logodds(v);
+    }
+
+    inline float getStairsProbMiss() const { return probability(stairs_prob_miss_log); }
+    inline void setStairsProbMiss(float v) {
+      this->stairs_prob_miss_log = logodds(v);
+    }
 
      /**
      * Prunes a node when it is collapsible. This overloaded
@@ -354,13 +399,13 @@ namespace octomap {
       return setNodeStairLogOdds(key,logodds);
     }
 
-    /// queries whether a node is stairs according to the tree's parameter for "occupancy"
+    /// queries whether a node is stairs according to the tree's parameter 
     inline bool isNodeStairs(const RoughOcTreeNode* node) const{
-      return (node->getStairLogOdds() > this->occ_prob_thres_log);
+      return (node->getStairLogOdds() > this->stairs_prob_thres_log);
     }
 
-    inline bool isNodeStairs(const RoughOcTreeNode& node) const{
-      return (node.getStairLogOdds() > this->occ_prob_thres_log);
+    inline bool isNodeStairs(const RoughOcTreeNode& node) {
+      return (node.getStairLogOdds() > this->stairs_prob_thres_log);
     }
 
     RoughOcTreeNode* updateNodeStairs(const OcTreeKey& key, float log_odds_update);
@@ -449,20 +494,40 @@ namespace octomap {
 
     // binary io overloaded from OcTreeBase
     std::istream& readBinaryData(std::istream &s);
-    std::ostream& writeBinaryData(std::ostream &s) const;
+    std::ostream& writeBinaryData(std::ostream &s);
     std::istream& readBinaryNode(std::istream &s, RoughOcTreeNode* node);
-    std::ostream& writeBinaryNode(std::ostream &s, const RoughOcTreeNode* node) const;
+    std::ostream& writeBinaryNode(std::ostream &s, const RoughOcTreeNode* node);
     std::istream& readBinaryNodeViaThresholding(std::istream &s, RoughOcTreeNode* node);
-    std::ostream& writeBinaryNodeViaThresholding(std::ostream &s, const RoughOcTreeNode* node) const;
+    std::ostream& writeBinaryNodeViaThresholding(std::ostream &s, const RoughOcTreeNode* node);
     std::istream& readBinaryNodeViaBinning(std::istream &s, RoughOcTreeNode* node);
-    std::ostream& writeBinaryNodeViaBinning(std::ostream &s, const RoughOcTreeNode* node) const;
+    std::ostream& writeBinaryNodeViaBinning(std::ostream &s, const RoughOcTreeNode* node);
 
     RoughBinaryEncodingMode binary_encoding_mode;
     float rough_binary_thres; // must be between 0 and 1
+
+    // Binning vars to preallocate and reduce computation per node during read/write
+    // These could all be created/destroyed at beginning/end of publishing as well
     uint num_binary_bins; // must be power of 2
+    uint num_rough_bits;
+    uint num_bits_per_node; // Controls how much of the bitset is used! (num*8)
+    double binsize;
+
+    // Prealloc - All values must correspond!  Using dynamic causes slowdown
+    const uint binary_bins_to_use = 16; // must be power of 2; used when roughness is enabled
+    std::bitset<4> rough_bits; // size must equal to log2(binary_bins_to_use)!
+    std::bitset<48> bitmask; // size needs to be same as below!
+    std::bitset<48> read_byte; // size needs to be same as below!
+    std::bitset<48> children; // (log2(num_binary_bins) + 2) * 8 - must be set >= binary_bins_to_use and divisible by 8!
 
   protected:
     bool roughEnabled = false;
+    bool stairsEnabled = false;
+
+    float stairs_clamping_thres_max;
+    float stairs_clamping_thres_min;
+    float stairs_prob_thres_log;
+    float stairs_prob_hit_log;
+    float stairs_prob_miss_log;
 
     void updateInnerOccupancyRecurs(RoughOcTreeNode* node, unsigned int depth);
 
