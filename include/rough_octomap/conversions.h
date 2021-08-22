@@ -97,17 +97,26 @@ namespace octomap_msgs{
      if (!msg.binary)
        return NULL;
 
-     int bin_pos = msg.id.find("RoughOcTree-");
+     // Check if this a stairs map first, then if not, just regular RoughOctree
+     bool stairs = true;
+     int bin_pos = 14;
+     int str_pos = msg.id.find("RoughOcTree-S-");
+     if (str_pos == std::string::npos) {
+       str_pos = msg.id.find("RoughOcTree-");
+       bin_pos = 12;
+       stairs = false;
+     }
      octomap::AbstractOcTree* tree;
      if (msg.id == "ColorOcTree"){
        octomap::ColorOcTree* octree = new octomap::ColorOcTree(msg.resolution);
        readTree(octree, msg);
        tree = octree;
      }
-     else if (bin_pos != std::string::npos){
+     else if (str_pos != std::string::npos){
        octomap::RoughOcTree* octree = new octomap::RoughOcTree(msg.resolution);
+       octree->setStairsEnabled(stairs);
        // Set the number of bins, embedded in the id
-       octree->setNumBins(stoi(msg.id.substr(bin_pos+12)));
+       octree->setNumBins(stoi(msg.id.substr(bin_pos)));
        readTree(octree, msg);
        tree = octree;
      } else {
@@ -192,7 +201,9 @@ namespace octomap_msgs{
   template<typename T>
     typename std::enable_if<isRough<T>::value, std::string>::type
     Suffix(T* t) {
-      return "-" + std::to_string(t->getNumBins());
+      std::string stairsPrefix;
+      if (t->getStairsEnabled()) stairsPrefix = "-S";
+      return stairsPrefix + "-" + std::to_string(t->getNumBins());
     }
 
   std::string Suffix(...) { return ""; }

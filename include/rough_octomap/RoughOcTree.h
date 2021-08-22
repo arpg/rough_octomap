@@ -140,7 +140,7 @@ namespace octomap {
     inline void  setRough(float c) {this->rough = c; }
 
     inline float getStairLogOdds() const { return stair_logodds; }
-    inline void  setStairLogOdds(float s) {this->stair_logodds = s; }
+    inline void  setStairLogOdds(float s) { this->stair_logodds = s; }
     inline float getStairProbability() const { return probability(stair_logodds); }
     inline void updateStairChildren() { this->setStairLogOdds(this->getMaxChildStairLogOdds()); }
     float getMeanChildStairLogOdds() const;
@@ -232,20 +232,20 @@ namespace octomap {
     }
 
     RGBColor getRoughColor() {
-      if (isnan(this->getRough())) {
-        // std::cout << "ROUGH COLOR HAS NAN" << std::endl;
-        RGBColor nan_color;
-        nan_color.r = 1.0;
-        nan_color.g = 0.0;
-        nan_color.b = 0.0;
-        return nan_color;
-      } else if (this->getStairLogOdds() > 0.5) {
+      if (this->getStairLogOdds() > 0.5) {
         // std::cout << "ROUGH COLOR HAS STAIRS" << std::endl;
         RGBColor stair_color;
         stair_color.r = 0.0;
         stair_color.g = 0.0;
         stair_color.b = 1.0;
         return stair_color;
+      } else if (isnan(this->getRough())) {
+        // std::cout << "ROUGH COLOR HAS NAN" << std::endl;
+        RGBColor nan_color;
+        nan_color.r = 1.0;
+        nan_color.g = 0.0;
+        nan_color.b = 0.0;
+        return nan_color;
       } else {
         // std::cout << "ROUGH COLOR IS NORMAL" << std::endl;
         return ratioToBW(this->getRough());
@@ -286,7 +286,7 @@ namespace octomap {
 
     std::string getTreeType() const {return "RoughOcTree";}
 
-    inline void updateNumBinsPerNode() {
+    inline void updateNumBitsPerNode() {
       this->num_bits_per_node = 2 + this->num_rough_bits + 1*((int)getStairsEnabled());
     }
 
@@ -298,15 +298,15 @@ namespace octomap {
       if (!e) this->num_binary_bins = 0;
       else if (!this->num_binary_bins) this->num_binary_bins = this->binary_bins_to_use;
       // Reset the bits calculations
-      this->num_rough_bits = log2(this->num_binary_bins);
-      updateNumBinsPerNode();
       if (this->num_binary_bins) this->binsize = 1.0 / (this->num_binary_bins - 1);
+      this->num_rough_bits = log2(this->num_binary_bins);
+      updateNumBitsPerNode();
     }
 
     inline bool getStairsEnabled() const { return stairsEnabled; }
     inline void setStairsEnabled(bool e) {
       this->stairsEnabled = e;
-      updateNumBinsPerNode();
+      updateNumBitsPerNode();
     }
 
     inline uint getNumBins() const { return num_binary_bins; }
@@ -399,7 +399,7 @@ namespace octomap {
       return setNodeStairLogOdds(key,logodds);
     }
 
-    /// queries whether a node is stairs according to the tree's parameter 
+    // queries whether a node is stairs according to the tree's parameter
     inline bool isNodeStairs(const RoughOcTreeNode* node) const{
       return (node->getStairLogOdds() > this->stairs_prob_thres_log);
     }
@@ -515,9 +515,9 @@ namespace octomap {
     // Prealloc - All values must correspond!  Using dynamic causes slowdown
     const uint binary_bins_to_use = 16; // must be power of 2; used when roughness is enabled
     std::bitset<4> rough_bits; // size must equal to log2(binary_bins_to_use)!
-    std::bitset<48> bitmask; // size needs to be same as below!
-    std::bitset<48> read_byte; // size needs to be same as below!
-    std::bitset<48> children; // (log2(num_binary_bins) + 2) * 8 - must be set >= binary_bins_to_use and divisible by 8!
+    std::bitset<56> bitmask; // size needs to be same as below!
+    std::bitset<56> read_byte; // size needs to be same as below!
+    std::bitset<56> children; // (log2(num_binary_bins)<rough bits> + 1<stair bit> + 2<occupancy bits>) * 8  - must be set >= binary_bins_to_use and divisible by 8!
 
   protected:
     bool roughEnabled = false;

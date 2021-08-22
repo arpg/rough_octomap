@@ -126,12 +126,12 @@ namespace octomap {
     // Defaults for stock map - no rough bits
     num_binary_bins = 0;
     // We know these, but leaving the calculations for clarity.  They get set in setRoughEnabled()
-    num_rough_bits = log2(num_binary_bins);
-    num_bits_per_node = 2 + num_rough_bits;
     if (num_binary_bins) binsize = 1 / (num_binary_bins - 1);
+    num_rough_bits = log2(num_binary_bins);
+    updateNumBitsPerNode();
     // stair probability params
-    stairs_clamping_thres_max = logodds(0.12);
-    stairs_clamping_thres_min = logodds(0.97);
+    stairs_clamping_thres_max = logodds(0.97);
+    stairs_clamping_thres_min = logodds(0.12);
     stairs_prob_thres_log = logodds(0.5);
     stairs_prob_hit_log = logodds(0.99);
     stairs_prob_miss_log = logodds(0.49);
@@ -344,42 +344,22 @@ namespace octomap {
         }
       }
 
-      // if (lazy_eval)
-      //   return updateNodeRecurs(this->getNodeChild(node, pos), created_node, key, depth+1, log_odds_update, lazy_eval);
-      // else
-      {
-        RoughOcTreeNode* retval = updateNodeStairsRecurs(this->getNodeChild(node, pos), created_node, key, depth+1, log_odds_update);
-        // prune node if possible, otherwise set own probability
-        // note: combining both did not lead to a speedup!
-        if (this->pruneNode(node)){
-          // return pointer to current parent (pruned), the just updated node no longer exists
-          retval = node;
-        } else{
-          node->updateStairChildren();
-        }
-
-        return retval;
+      RoughOcTreeNode* retval = updateNodeStairsRecurs(this->getNodeChild(node, pos), created_node, key, depth+1, log_odds_update);
+      // prune node if possible, otherwise set own probability
+      // note: combining both did not lead to a speedup!
+      if (this->pruneNode(node)){
+        // return pointer to current parent (pruned), the just updated node no longer exists
+        retval = node;
+      } else{
+        node->updateStairChildren();
       }
+
+      return retval;
     }
 
     // at last level, update node, end of recursion
     else {
-      if (use_change_detection) {
-        bool occBefore = this->isNodeStairs(node);
-        updateNodeStairLogOdds(node, log_odds_update);
-
-        if (node_just_created){  // new node
-          changed_keys.insert(std::pair<OcTreeKey,bool>(key, true));
-        } else if (occBefore != this->isNodeStairs(node)) {  // occupancy changed, track it
-          KeyBoolMap::iterator it = changed_keys.find(key);
-          if (it == changed_keys.end())
-            changed_keys.insert(std::pair<OcTreeKey,bool>(key, false));
-          else if (it->second == false)
-            changed_keys.erase(it);
-        }
-      } else {
-        updateNodeStairLogOdds(node, log_odds_update);
-      }
+      updateNodeStairLogOdds(node, log_odds_update);
       return node;
     }
   }
@@ -632,7 +612,7 @@ namespace octomap {
         }
 
         if (this->stairsEnabled) {
-          if (children[idx + 2 + num_rough_bits]==1) {
+          if (children[idx + 2 + num_rough_bits] == 1) {
             this->getNodeChild(node, i)->setStairLogOdds(this->stairs_clamping_thres_max);
           } else {
             this->getNodeChild(node, i)->setStairLogOdds(this->stairs_clamping_thres_min);
@@ -681,6 +661,8 @@ namespace octomap {
           }
           if (this->stairsEnabled && this->isNodeStairs(child)) {
             children[idx + 2 + num_rough_bits] = 1;
+          } else {
+            children[idx + 2 + num_rough_bits] = 0;
           }
         }
         else { children[idx] = 1; children[idx + 1] = 0; }
